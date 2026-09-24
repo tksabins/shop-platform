@@ -18,6 +18,10 @@ USER_SERVICE_URL = os.getenv(
     "http://user-service:8000"
 )
 
+PAYMENT_SERVICE_URL = os.getenv(
+    "PAYMENT_SERVICE_URL",
+    "http://payment-service:8000"
+)
 
 @app.get("/")
 def root():
@@ -83,4 +87,53 @@ def order_summary():
         raise HTTPException(
             status_code=503,
             detail=f"Dependent service unavailable: {exc}"
+        )
+
+@app.post("/checkout/{order_id}")
+def checkout(order_id: int):
+    orders = {
+        1001: {
+            "user_id": 1,
+            "product_id": 1,
+            "amount": 75000
+        },
+        1002: {
+            "user_id": 2,
+            "product_id": 3,
+            "amount": 10000
+        }
+    }
+
+    if order_id not in orders:
+        raise HTTPException(
+            status_code=404,
+            detail="Order not found"
+        )
+
+    order = orders[order_id]
+
+    try:
+        payment_response = requests.post(
+            f"{PAYMENT_SERVICE_URL}/payments",
+            json={
+                "order_id": order_id,
+                "amount": order["amount"]
+            },
+            timeout=3
+        )
+
+        payment_response.raise_for_status()
+
+        return {
+            "order_id": order_id,
+            "user_id": order["user_id"],
+            "product_id": order["product_id"],
+            "payment": payment_response.json(),
+            "status": "completed"
+        }
+
+    except requests.RequestException as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Payment service unavailable: {exc}"
         )
