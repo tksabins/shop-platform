@@ -117,6 +117,7 @@ def checkout(order_id: int):
             f"{PAYMENT_SERVICE_URL}/payments",
             json={
                 "order_id": order_id,
+                "user_id": order["user_id"],
                 "amount": order["amount"]
             },
             timeout=3
