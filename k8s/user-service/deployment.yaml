@@ -4,6 +4,8 @@ kind: Deployment
 metadata:
   name: user-service
   namespace: shopsphere
+  annotations:
+    shopsphere.io/change-reason: "gitops-validation"
 spec:
   replicas: 1
   selector:
