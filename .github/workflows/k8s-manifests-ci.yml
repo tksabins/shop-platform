@@ -1,0 +1,97 @@
+name: ShopSphere Kubernetes CI
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  detect-changes:
+    name: Detect Kubernetes Changes
+    runs-on: ubuntu-latest
+
+    outputs:
+      kubernetes: ${{ steps.filter.outputs.kubernetes }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Detect changed files
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            kubernetes:
+              - 'k8s/**'
+              - '.github/workflows/k8s-manifests-ci.yml'
+  validate:
+    name: Validate Kubernetes Manifests
+    needs: detect-changes
+    if: needs.detect-changes.outputs.kubernetes == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install yamllint
+        run: python -m pip install yamllint==1.37.1
+
+      - name: Validate YAML syntax and indentation
+        run: yamllint -d relaxed k8s/
+
+      - name: Install Kubeconform
+        run: |
+          curl -fsSL -o kubeconform.tar.gz \
+            https://github.com/yannh/kubeconform/releases/download/v0.7.0/kubeconform-linux-amd64.tar.gz
+          tar -xzf kubeconform.tar.gz kubeconform
+          sudo install kubeconform /usr/local/bin/kubeconform
+
+      - name: Validate Kubernetes schemas
+        run: |
+          find k8s/ -type f \( -name '*.yaml' -o -name '*.yml' \) \
+            -exec kubeconform -strict -summary \
+            -kubernetes-version 1.32.0 {} +
+  kubernetes-ci-gate:
+    name: Kubernetes CI Gate
+    needs:
+      - detect-changes
+      - validate
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Evaluate Kubernetes CI
+        env:
+          DETECT_RESULT: ${{ needs.detect-changes.result }}
+          K8S_CHANGED: ${{ needs.detect-changes.outputs.kubernetes }}
+          VALIDATE_RESULT: ${{ needs.validate.result }}
+        run: |
+          if [[ "$DETECT_RESULT" != "success" ]]; then
+            echo "Kubernetes change detection failed"
+            exit 1
+          fi
+
+          if [[ "$K8S_CHANGED" == "false" ]]; then
+            if [[ "$VALIDATE_RESULT" == "skipped" ]]; then
+              echo "No Kubernetes changes. Intentional skip accepted."
+              exit 0
+            fi
+
+            echo "Unexpected Kubernetes validation result"
+            exit 1
+          fi
+
+          if [[ "$K8S_CHANGED" == "true" &&
+                "$VALIDATE_RESULT" == "success" ]]; then
+            echo "Kubernetes manifest validation passed"
+            exit 0
+          fi
+
+          echo "Kubernetes CI failed"
+          exit 1
