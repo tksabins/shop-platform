@@ -4,11 +4,6 @@ on:
   pull_request:
     branches:
       - main
-    paths:
-      - "user-service/**"
-      - "k8s/user-service/**"
-      - ".github/workflows/user-service-ci.yml"
-
   push:
     branches:
       - main
@@ -20,11 +15,37 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
   packages: write
 
 jobs:
+  detect-changes:
+    name: Detect User Service Changes
+    runs-on: ubuntu-latest
+
+    outputs:
+      application: ${{ steps.filter.outputs.application }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Detect changed files
+        id: filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            application:
+              - 'user-service/**'
+              - '.github/workflows/user-service-ci.yml'
   validate:
     name: Validate User Service
+    needs: detect-changes
+    if: |
+      github.event_name == 'push' ||
+      github.event_name == 'workflow_dispatch' ||
+      needs.detect-changes.outputs.application == 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -71,3 +92,43 @@ jobs:
           platforms: linux/arm64
           push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
           tags: ghcr.io/tksabins/shopsphere-user-service:${{ github.sha }}
+  application-ci-gate:
+    name: User Service CI Gate
+    needs:
+      - detect-changes
+      - validate
+      - build
+    if: ${{ always() && github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Evaluate Application CI
+        env:
+          DETECT_RESULT: ${{ needs.detect-changes.result }}
+          APP_CHANGED: ${{ needs.detect-changes.outputs.application }}
+          VALIDATE_RESULT: ${{ needs.validate.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+        run: |
+          if [[ "$DETECT_RESULT" != "success" ]]; then
+            echo "Change detection failed"
+            exit 1
+          fi
+
+          if [[ "$APP_CHANGED" == "false" ]]; then
+            if [[ "$VALIDATE_RESULT" == "skipped" && "$BUILD_RESULT" == "skipped" ]]; then
+              echo "No application changes. Intentional skips accepted."
+              exit 0
+            fi
+            echo "Unexpected application job results"
+            exit 1
+          fi
+
+          if [[ "$APP_CHANGED" == "true" &&
+                "$VALIDATE_RESULT" == "success" &&
+                "$BUILD_RESULT" == "success" ]]; then
+            echo "Application validation and Docker build passed"
+            exit 0
+          fi
+
+          echo "Application CI failed"
+          exit 1
