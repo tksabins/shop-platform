@@ -18,7 +18,7 @@ spec:
         - name: ghcr-secret
       containers:
         - name: user-service
-          image: ghcr.io/tksabins/shopsphere-user-service:v3
+          image: ghcr.io/tksabins/shopsphere-user-service:754e31f72efe943c54e170b261747a6130cf2580
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
