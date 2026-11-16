@@ -1,0 +1,22 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: shopsphere
+  namespace: argocd
+spec:
+  description: GitOps project for ShopSphere microservices
+  sourceRepos:
+    - https://github.com/tksabins/shop-platform.git
+  destinations:
+    - namespace: shopsphere
+      server: https://kubernetes.default.svc
+  clusterResourceWhitelist: []
+  roles:
+    - name: Viewer
+      description: This role can only view the application
+      policies:
+        - p, proj:shopsphere:Viewer, applications, get, shopsphere/*, allow
+    - name: Deployer
+      policies:
+        - p, proj:shopsphere:Deployer, applications, sync, shopsphere/*, allow
+        - p, proj:shopsphere:Deployer, applications, get, shopsphere/*, allow

@@ -1,0 +1,16 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: shopsphere-bootstrap
+  namespace: argocd
+spec:
+  description: Bootstrap project for ShopSphere App of Apps
+  sourceRepos:
+    - https://github.com/tksabins/shop-platform.git
+  destinations:
+    - namespace: argocd
+      server: https://kubernetes.default.svc
+  clusterResourceWhitelist: []
+  namespaceResourceWhitelist:
+    - group: argoproj.io
+      kind: Application
