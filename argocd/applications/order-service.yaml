@@ -1,0 +1,19 @@
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: shopsphere-order-service
+  namespace: argocd
+spec:
+  project: shopsphere
+  source:
+    repoURL: https://github.com/tksabins/shop-platform.git
+    targetRevision: main
+    path: k8s/order-service
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: shopsphere
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
