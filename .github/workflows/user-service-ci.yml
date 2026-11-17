@@ -13,27 +13,27 @@ on:
 
   workflow_dispatch:
 
-permissions:
-  contents: read
-  pull-requests: read
-  packages: write
+permissions: {}
 
 jobs:
   detect-changes:
     name: Detect User Service Changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
 
     outputs:
       application: ${{ steps.filter.outputs.application }}
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Detect changed files
         id: filter
         if: github.event_name == 'pull_request'
-        uses: dorny/paths-filter@v3
+        uses: dorny/paths-filter@v4
         with:
           filters: |
             application:
@@ -41,18 +41,20 @@ jobs:
               - '.github/workflows/user-service-ci.yml'
   validate:
     name: Validate User Service
+    permissions:
+      contents: read
     needs: detect-changes
     if: |
       github.event_name == 'push' ||
       github.event_name == 'workflow_dispatch' ||
       needs.detect-changes.outputs.application == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Install dependencies
@@ -64,33 +66,38 @@ jobs:
         working-directory: ./user-service
         run: |
           python -m compileall -q app
-          python -c "from app.main import app; print('FastAPI application imported successfully')"
+          python -c "from app.main import app"
+          echo "FastAPI application imported successfully"
   build:
     name: Build User Service Docker Image
+    permissions:
+      contents: read
+      packages: write
     needs: validate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
       - name: Login to GitHub Container Registry
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build ARM64 Docker image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./user-service
           platforms: linux/arm64
-          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          push: ${{ github.event_name == 'push' &&
+                github.ref == 'refs/heads/main' }}
           tags: ghcr.io/tksabins/shopsphere-user-service:${{ github.sha }}
   application-ci-gate:
     name: User Service CI Gate
@@ -99,7 +106,7 @@ jobs:
       - validate
       - build
     if: ${{ always() && github.event_name == 'pull_request' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Evaluate Application CI
@@ -115,7 +122,8 @@ jobs:
           fi
 
           if [[ "$APP_CHANGED" == "false" ]]; then
-            if [[ "$VALIDATE_RESULT" == "skipped" && "$BUILD_RESULT" == "skipped" ]]; then
+            if [[ "$VALIDATE_RESULT" == "skipped" &&
+                  "$BUILD_RESULT" == "skipped" ]]; then
               echo "No application changes. Intentional skips accepted."
               exit 0
             fi
