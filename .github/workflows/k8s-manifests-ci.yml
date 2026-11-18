@@ -12,38 +12,49 @@ permissions:
 jobs:
   detect-changes:
     name: Detect Kubernetes Changes
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     outputs:
       kubernetes: ${{ steps.filter.outputs.kubernetes }}
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Detect changed files
         id: filter
-        uses: dorny/paths-filter@v3
+        uses: dorny/paths-filter@v4
         with:
           filters: |
             kubernetes:
               - 'k8s/**'
+              - 'argocd/**'
+              - 'scripts/**'
               - '.github/workflows/k8s-manifests-ci.yml'
   validate:
     name: Validate Kubernetes Manifests
     needs: detect-changes
     if: needs.detect-changes.outputs.kubernetes == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
-      - name: Install yamllint
-        run: python -m pip install yamllint==1.37.1
-
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install validation dependencies
+        run: |
+          python -m pip install yamllint==1.37.1 PyYAML==6.0.3
+          python -m pip check
       - name: Validate YAML syntax and indentation
-        run: yamllint -d relaxed k8s/
+        id: yaml-lint
+        run: |
+          set -o pipefail
+          yamllint --strict -d relaxed k8s/ argocd/ 2>&1 \
+            | tee "$RUNNER_TEMP/yamllint.log"
 
       - name: Install Kubeconform
         run: |
@@ -52,21 +63,92 @@ jobs:
           tar -xzf kubeconform.tar.gz kubeconform
           sudo install kubeconform /usr/local/bin/kubeconform
 
-      - name: Validate Kubernetes schemas
+      - name: Validate Kubernetes and ArgoCD schemas
+        id: schema-validation
         run: |
-          find k8s/ -type f \( -name '*.yaml' -o -name '*.yml' \) \
-            -exec kubeconform -strict -summary \
-            -kubernetes-version 1.32.0 {} +
+          set -o pipefail
+
+          schema_url="https://raw.githubusercontent.com"
+          schema_url+="/datreeio/CRDs-catalog/main"
+          schema_url+="/{{.Group}}"
+          schema_url+="/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
+
+          kubeconform -strict -summary \
+            -kubernetes-version 1.32.0 \
+            -schema-location default \
+            -schema-location "$schema_url" \
+            k8s/ argocd/ 2>&1 \
+            | tee "$RUNNER_TEMP/kubeconform.log"
+
+      - name: Validate Argo CD source paths
+        id: source-path-validation
+        run: |
+          set -o pipefail
+          python scripts/validate_argocd_paths.py 2>&1 \
+            | tee "$RUNNER_TEMP/argocd-paths.log"
+
+      - name: Generate Kubernetes validation summary
+        if: ${{ always() }}
+        env:
+          LINT_RESULT: ${{ steps.yaml-lint.outcome }}
+          SCHEMA_RESULT: ${{ steps.schema-validation.outcome }}
+          PATH_RESULT: ${{ steps.source-path-validation.outcome }}
+        run: |
+          {
+            echo "## ShopSphere Kubernetes CI Report"
+            echo ""
+            echo "| Validation check | Status |"
+            echo "| --- | --- |"
+            echo "| YAML syntax | $LINT_RESULT |"
+            echo "| Schema validation | $SCHEMA_RESULT |"
+            echo "| Argo CD source paths | $PATH_RESULT |"
+            echo ""
+            echo "### YAML syntax validation"
+            if [[ -f "$RUNNER_TEMP/yamllint.log" ]]; then
+              if [[ -s "$RUNNER_TEMP/yamllint.log" ]]; then
+                echo '```text'
+                cat "$RUNNER_TEMP/yamllint.log"
+                echo '```'
+              elif [[ "$LINT_RESULT" == "success" ]]; then
+                echo "No YAML errors or warnings detected."
+              else
+                echo "YAML validation produced no diagnostic output."
+              fi
+            else
+              echo "YAML validation output unavailable."
+            fi
+
+            echo ""
+            echo "### Kubernetes schema validation"
+            if [[ -f "$RUNNER_TEMP/kubeconform.log" ]]; then
+              echo '```text'
+              cat "$RUNNER_TEMP/kubeconform.log"
+              echo '```'
+            else
+              echo "Schema validation output unavailable."
+            fi
+
+            echo ""
+            echo "### Argo CD source-path validation"
+            if [[ -f "$RUNNER_TEMP/argocd-paths.log" ]]; then
+              echo '```text'
+              cat "$RUNNER_TEMP/argocd-paths.log"
+              echo '```'
+            else
+              echo "Source-path validation output unavailable."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
   kubernetes-ci-gate:
     name: Kubernetes CI Gate
     needs:
       - detect-changes
       - validate
     if: ${{ always() }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Evaluate Kubernetes CI
+        id: gate-evaluation
         env:
           DETECT_RESULT: ${{ needs.detect-changes.result }}
           K8S_CHANGED: ${{ needs.detect-changes.outputs.kubernetes }}
@@ -95,3 +177,21 @@ jobs:
 
           echo "Kubernetes CI failed"
           exit 1
+      - name: Generate Kubernetes CI Gate summary
+        if: ${{ always() }}
+        env:
+          DETECT_RESULT: ${{ needs.detect-changes.result }}
+          K8S_CHANGED: ${{ needs.detect-changes.outputs.kubernetes }}
+          VALIDATE_RESULT: ${{ needs.validate.result }}
+          GATE_RESULT: ${{ steps.gate-evaluation.outcome }}
+        run: |
+          {
+            echo "## Kubernetes CI Gate Report"
+            echo ""
+            echo "| Check | Result |"
+            echo "| --- | --- |"
+            echo "| Change detection | $DETECT_RESULT |"
+            echo "| Kubernetes changes | ${K8S_CHANGED:-unknown} |"
+            echo "| Manifest validation | $VALIDATE_RESULT |"
+            echo "| CI Gate evaluation | $GATE_RESULT |"
+          } >> "$GITHUB_STEP_SUMMARY"
