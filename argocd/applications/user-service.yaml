@@ -8,7 +8,7 @@ spec:
   source:
     repoURL: https://github.com/tksabins/shop-platform.git
     targetRevision: main
-    path: k8s/user-service
+    path: k8s/user-service-invalid
   destination:
     server: https://kubernetes.default.svc
     namespace: shopsphere
